@@ -8,6 +8,8 @@
 *#
 .#*
 build
+*debug*
+*release*
 test/data_*
 .coverage
 .pytest_cache/
