@@ -1,0 +1,22 @@
+[package]
+name = "cpp-sas7bdat"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Your runtime dependencies
+libc = "0.2"
+
+[build-dependencies]
+# Build-time dependencies for build.rs
+cc = "1.0"
+bindgen = "0.69"
+num_cpus = "1.0"
+
+[dev-dependencies]
+# For testing
+tempfile = "3.0"
+
+[lib]
+name = "cpp_sas7bdat_arrow"
+crate-type = ["cdylib", "rlib"]
