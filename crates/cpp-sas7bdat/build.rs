@@ -8,11 +8,23 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     
+    let venv_bin_path = manifest_dir
+            .parent()  // Go up one level from crates/cpp-sas7bdat
+            .unwrap()
+            .parent()  // Go up another level to the project root
+            .unwrap()
+            .join(".venv")
+            .join("bin");
+    println!("cargo:warning=manifest_dir ={:?}", manifest_dir.to_str());
+    println!("cargo:warning=venv_bin_dir ={:?}", venv_bin_path.to_str());
     // Run uv sync first (assuming pyproject.toml exists)
     run_uv_sync(&manifest_dir);
     
     // Build cpp-sas7bdat using make
-    build_cppsas7bdat(&manifest_dir);
+    build_cppsas7bdat(
+        &manifest_dir,
+        &venv_bin_path,
+    );
     
     // Setup C++ compilation for our wrapper
     let mut build = cc::Build::new();
@@ -93,7 +105,10 @@ fn run_uv_sync(manifest_dir: &Path) {
     println!("cargo:warning=uv sync completed successfully");
 }
 
-fn build_cppsas7bdat(manifest_dir: &Path) {
+fn build_cppsas7bdat(
+    manifest_dir: &Path,
+    venv_bin_dir: &Path,
+) {
     let cppsas_dir = manifest_dir.join("vendor");
     //  println!("{}",&format!("{:?}",cppsas_dir));
     if !cppsas_dir.exists() {
@@ -113,7 +128,7 @@ fn build_cppsas7bdat(manifest_dir: &Path) {
             .arg("..")
             .arg("-DCMAKE_BUILD_TYPE=Release")
             .arg("-DBUILD_SHARED_LIBS=OFF") // Build static library
-            .current_dir(&build_dir)
+            .current_dir(&cppsas_dir)
             .output()
             .expect("Failed to run cmake. Make sure cmake is installed.");
         
@@ -126,10 +141,30 @@ fn build_cppsas7bdat(manifest_dir: &Path) {
         }
     }
     
+
     // Run make
-    println!("{:?}",build_dir);
+    println!("build: {:?}",build_dir);
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let new_path = format!("{}:{}", venv_bin_dir.display(), current_path);
+
+        // Add this before running make to debug the conan issue
+    let debug_conan = Command::new("bash")
+        .arg("-c")
+        .arg("which conan && file $(which conan) && head -5 $(which conan)")
+        .env("VIRTUAL_ENV", venv_bin_dir.parent().unwrap())
+        .env("PATH", new_path.clone())
+        .current_dir(&build_dir)
+        .output()
+        .expect("Failed to debug conan");
+
+    println!("cargo:warning=Conan debug: {}", String::from_utf8_lossy(&debug_conan.stdout));
+    println!("cargo:warning=Conan debug stderr: {}", String::from_utf8_lossy(&debug_conan.stderr));
+
+    
     let make_output = Command::new("make")
         .arg("build")
+        .env("VIRTUAL_ENV", venv_bin_dir.parent().unwrap())
+        .env("PATH", new_path)
         .current_dir(&build_dir)
         .output()
         .expect("Failed to run make. Make sure make is installed.");
@@ -156,37 +191,44 @@ fn setup_dependencies(build: &mut cc::Build) {
     if let Ok(home_dir) = env::var("HOME") {
         let conan2_dir = format!("{}/.conan2", home_dir);
         if std::path::Path::new(&conan2_dir).exists() {
-            find_conan2_includes(&conan2_dir, build);
+            find_and_link_all_conan_libraries();
         }
     }
 }
 
-fn find_conan2_includes(conan2_dir: &str, build: &mut cc::Build) {
-    // Conan2 structure: ~/.conan2/p/b/[hash]/p/include/
-    let packages_dir = format!("{}/p/b", conan2_dir);
-    
-    if let Ok(entries) = std::fs::read_dir(&packages_dir) {
-        for entry in entries.flatten() {
-            let package_path = entry.path();
-            if package_path.is_dir() {
-                // Look for include directory in each package
-                let include_path = package_path.join("p").join("include");
-                if include_path.exists() {
-                    build.include(&include_path);
-                    println!("cargo:warning=Added conan2 include: {}", include_path.display());
+fn find_and_link_all_conan_libraries() {
+    if let Ok(home_dir) = env::var("HOME") {
+        let conan2_dir = format!("{}/.conan2/p/b", home_dir);
+        let mut found_libs = std::collections::HashSet::new();
+        
+        if let Ok(entries) = std::fs::read_dir(&conan2_dir) {
+            for entry in entries.flatten() {
+                let package_path = entry.path();
+                let lib_path = package_path.join("p").join("lib");
+                if lib_path.exists() {
+                    println!("cargo:rustc-link-search=native={}", lib_path.display());
                     
-                    // Check what packages we found
-                    if let Ok(inc_entries) = std::fs::read_dir(&include_path) {
-                        for inc_entry in inc_entries.flatten().take(3) {
-                            let name = inc_entry.file_name().to_string_lossy().to_string(); // Convert to owned String
-                            if name.contains("spdlog") || name.contains("boost") || name.contains("fmt") {
-                                println!("cargo:warning=  Found dependency: {}", name);
+                    if let Ok(lib_entries) = std::fs::read_dir(&lib_path) {
+                        for lib_entry in lib_entries.flatten() {
+                            let lib_name = lib_entry.file_name().to_string_lossy().to_string();
+                            
+                            if lib_name.ends_with(".a") && lib_name.starts_with("lib") {
+                                if let Some(clean_name) = lib_name.strip_prefix("lib").and_then(|s| s.strip_suffix(".a")) {
+                                    if !matches!(clean_name, "c" | "m" | "dl" | "pthread" | "rt" | "gcc" | "gcc_s" | "stdc++" | "util") {
+                                        if !found_libs.contains(clean_name) {
+                                            println!("cargo:rustc-link-lib=static={}", clean_name);
+                                            found_libs.insert(clean_name.to_string());
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
         }
+        
+        println!("cargo:warning=Linked {} Conan libraries", found_libs.len());
     }
 }
 

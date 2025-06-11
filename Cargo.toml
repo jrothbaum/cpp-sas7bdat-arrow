@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "crates/cpp-sas7bdat",
+]
+resolver = "2"
+

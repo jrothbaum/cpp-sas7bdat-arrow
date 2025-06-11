@@ -1,5 +1,5 @@
 def main():
-    print("Hello from cpp-sas7bdat-arrow!")
+    print("Hello from cpp-sas7bdat!")
 
 
 if __name__ == "__main__":

@@ -60,7 +60,7 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/7e/f5/d3de05f350c9ea40998543b11f38798d54ce0f0f88a558e1c7ed31a3123e/conan-2.17.0.tar.gz", hash = "sha256:91bca3c5b4a9b361d2a9155cf7e678707fccd738cdeb601b5ca398478f99a824", size = 507536, upload-time = "2025-05-28T17:35:50.89Z" }
 
 [[package]]
-name = "cpp-sas7bdat-arrow"
+name = "cpp-sas7bdat"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

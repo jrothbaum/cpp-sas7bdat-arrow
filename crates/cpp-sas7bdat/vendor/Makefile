@@ -8,8 +8,8 @@ PACKAGE_NAME := $(shell cat package.txt)
 PACKAGE_VERSION := $(shell cat version.txt)
 
 BUILD_TYPE := Release
-PYTHON := python3.10
-PYTHON_VERSION := 3.10.0  #3.8.12
+PYTHON := python3.11
+PYTHON_VERSION := 3.11.0  #3.8.12
 VENV_NAME := $(shell cat .python-version)
 ENABLE_CONAN := ON
 ENABLE_COVERAGE := OFF
@@ -24,6 +24,9 @@ PIP_OPTIONS :=
 #CONAN_OPTIONS := -s:b compiler.cppstd=17 -s:h compiler.cppstd=17 --profile:build=default --build=catch2/3.4.0 --build=missing
 CONAN_OPTIONS := -s:b compiler.cppstd=20 -s:h compiler.cppstd=20 --profile:build=default --profile:host=default --build=missing
 
+# Define the path to the Conan executable relative to the Makefile's location
+CONAN_BIN := ../../.venv/bin/conan
+
 .PHONY: all
 all: build
 
@@ -37,10 +40,12 @@ very-clean:
 
 .PHONY: configure
 configure:
+	@echo "--- configure here" 
 	mkdir -p build; cd build; conan install .. ${CONAN_OPTIONS} -o '&:ENABLE_COVERAGE=${ENABLE_COVERAGE}' -o '&:ENABLE_TESTING=${ENABLE_TESTING}'
 
 .PHONY: build
 build: configure
+	@echo "--- Build configure here" 
 	cd build; conan build .. ${CONAN_OPTIONS} -o '&:ENABLE_COVERAGE=${ENABLE_COVERAGE}' -o '&:ENABLE_TESTING=${ENABLE_TESTING}'
 
 .PHONY: tests

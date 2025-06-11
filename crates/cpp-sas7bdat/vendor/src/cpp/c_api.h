@@ -1,4 +1,3 @@
-// src/cpp/c_api.h
 #ifndef CPP_SAS7BDAT_C_API_H
 #define CPP_SAS7BDAT_C_API_H
 
@@ -17,7 +16,7 @@ typedef void* ChunkIteratorHandle;
 typedef struct {
     const char* string_val;
     double numeric_val;
-    uint8_t value_type; // 0=null, 1=string, 2=numeric, 3=date, etc.
+    uint8_t value_type; // 0=null, 1=string, 2=numeric, 3=date, etc. (matches SasColumnType in Rust conceptually)
     uint8_t is_null;
 } CColumnValue;
 
@@ -37,7 +36,7 @@ typedef struct {
 // Column metadata
 typedef struct {
     const char* name;
-    uint8_t column_type; // 0=string, 1=numeric, 2=date, etc.
+    uint8_t column_type; // 0=string, 1=numeric, 2=date, etc. (matches SasColumnType in Rust conceptually)
     size_t length;
 } CColumnInfo;
 

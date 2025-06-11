@@ -20,5 +20,12 @@
         "system_error": "cpp",
         "tuple": "cpp",
         "variant": "cpp"
-    }
+    },
+    "rust-analyzer.linkedProjects": [
+        "./crates/cpp-sas7bdat/Cargo.toml"
+    ],
+    "rust-analyzer.cargo.buildScripts.enable": false,
+    "rust-analyzer.cargo.buildScripts.overrideCommand": null,
+    "rust-analyzer.procMacro.enable": false,
+    "rust-analyzer.cargo.buildScripts.invocationStrategy": "per_workspace"
 }
