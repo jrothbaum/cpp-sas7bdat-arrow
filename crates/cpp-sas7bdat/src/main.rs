@@ -1,29 +1,39 @@
 use std::time::Instant;
+use cpp_sas7bdat::{SasBatchIterator, SasReader};
 use polars::frame::DataFrame;
-use cpp_sas7bdat::to_polars::{
-    get_sas_polars_schema,
-    SasDataFrameIterator
-};
+
+
 fn main() {
-    let start = Instant::now();
-    // let path = "/home/jrothbaum/Coding/polars_readstat/crates/readstat-tests/tests/data/pyreadstat/basic/sample.sas7bdat";
-    let path = "/home/jrothbaum/Downloads/sas_pil/psam_p17.sas7bdat";
-    let schema = get_sas_polars_schema(&path);
-    println!("Schema: {:?}", schema.unwrap());
-    let mut iter = SasDataFrameIterator::new(
-        &path,
-        20_000 as usize,
-    ).unwrap();
+    let path = "/home/jrothbaum/Coding/polars_readstat/crates/readstat-tests/tests/data/pyreadstat/basic/sample.sas7bdat";
+    // let path = "/home/jrothbaum/Downloads/sas_pil/psam_p17.sas7bdat";
     
-    let mut i_rows: usize = 0;
-    for chunk_result in iter {
+    
+    
+    let start_get_iterator = Instant::now();
+    let mut sas_iter = SasBatchIterator::new(
+        path,
+        Some(20_000),
+    ).unwrap();
+    let duration_get_iterator = start_get_iterator.elapsed();
+    
+    let start_schema = Instant::now();
+    let schema = sas_iter.schema().unwrap().clone();
+    println!("Schema: {:?}", schema);
+    let duration_schema = start_schema.elapsed();
+    
+    let info = *sas_iter.info();
+    
+
+    let start_read = Instant::now();
+    let mut i_rows = 0;
+    for chunk_result in sas_iter {
         // Call the method on the iterator
         let df = match chunk_result {
             Ok(df) => {
                 println!("DataFrame shape: {:?}", df.shape());
                 println!("DataFrame shape: {:?}", df.estimated_size());
                 
-                // println!("{:?}", df);
+                println!("{:?}", df);
                 i_rows = i_rows + df.height();
                 df
             },
@@ -33,7 +43,16 @@ fn main() {
             }
         };
     }
-    let duration = start.elapsed();
-    println!("Function took: {:?}", duration);
+
+    let duration_read = start_read.elapsed();
+    println!("Schema:       {:?}", duration_schema);
+    println!("Iterator: {:?}", duration_get_iterator);
+    println!("Read: {:?}", duration_read);
     println!("Rows: {:?}", i_rows);
+
+    println!("Rows:     {:?}", info.num_rows);
+    println!("Columns:  {:?}", info.num_columns);
+    println!("Batches:  {:?}", info.num_batches);
+    println!("Chunk:    {:?}", info.chunk_size);
+    
 }

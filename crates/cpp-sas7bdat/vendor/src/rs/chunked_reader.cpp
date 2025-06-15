@@ -1,4 +1,4 @@
-// src/cpp/chunked_reader.cpp
+// src/rs/chunked_reader.cpp
 #include "chunked_reader.hpp"
 #include <stdexcept>
 #include <cstring>

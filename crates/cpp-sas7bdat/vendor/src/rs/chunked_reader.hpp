@@ -1,4 +1,4 @@
-// vendor/src/cpp/chunked_reader.hpp
+// vendor/src/rs/chunked_reader.hpp
 #ifndef CPP_SAS7BDAT_CHUNKED_READER_HPP_
 #define CPP_SAS7BDAT_CHUNKED_READER_HPP_
 
@@ -12,7 +12,7 @@ namespace cppsas7bdat {
 
 // Optimized chunk data structure - stores only raw buffers
 struct ChunkData {
-    // REMOVED: std::vector<std::vector<cppsas7bdat::Column>> rows;
+    
     std::vector<std::vector<uint8_t>> row_buffers; // Store raw buffer data only
     size_t start_row;
     size_t end_row;

@@ -10,6 +10,7 @@
 build
 *debug*
 *release*
+*Release*
 test/data_*
 .coverage
 .pytest_cache/
@@ -22,3 +23,5 @@ tmp
 CMakeUserPresets.json
 *.bin
 *.rlib
+
+*/.conan2/*

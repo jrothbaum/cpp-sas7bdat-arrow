@@ -1,6 +1,10 @@
 from conan import ConanFile, tools
 from conan.tools.cmake import CMakeDeps, CMakeToolchain, cmake_layout, CMake
 import os
+import sys
+
+sys.path.insert(0, f"{os.path.dirname(__file__)}/conan_files")
+from shared import SharedConfig
 
 class CppSAS7BDATProject(ConanFile):
     name = "cppsas7bdat"
@@ -12,7 +16,7 @@ class CppSAS7BDATProject(ConanFile):
     topics = ("c++17", "SAS7BDAT")
     settings = "os", "compiler", "build_type", "arch"
     options = {"shared": [True, False], "fPIC": [True, False], "ENABLE_COVERAGE": ["ON", "OFF"], "ENABLE_TESTING": ["ON", "OFF"]}
-    default_options = {"shared": True, "fPIC": True, "ENABLE_COVERAGE": "OFF", "fmt/*:shared": False, "ENABLE_TESTING": "ON"}
+    default_options = {"shared": False, "fPIC": True, "ENABLE_COVERAGE": "OFF", "fmt/*:shared": False, "ENABLE_TESTING": "ON"}
     generators = "VirtualBuildEnv", "VirtualRunEnv"
     build_policy = "missing"
     requires = (
@@ -39,8 +43,10 @@ class CppSAS7BDATProject(ConanFile):
         deps = CMakeDeps(self)
         deps.generate()
 
+
     def requirements(self):
-        self.requires("boost/1.86.0", headers=True, libs=True, visible=True, transitive_headers=True, transitive_libs=True)
+        self.requires("boost/1.85.0", headers=True, libs=True, visible=True, transitive_headers=True, transitive_libs=True)
+        self.requires("arrow/19.0.1")
         self.test_requires("catch2/3.4.0")
 
     def build(self):
@@ -65,37 +71,4 @@ class CppSAS7BDATProject(ConanFile):
         self.cpp_info.libs = ["cppsas7bdat"]
 
     def configure(self):
-        self.options["boost"].without_python = True
-        #self.options["boost"].python_executable = "python"
-        #self.options["boost"].python_version = "3.8"
-        #self.options["boost"].without_date_time = False
-        #self.options["boost"].without_atomic = True
-        #self.options["boost"].without_atomic = True
-        #self.options["boost"].without_chrono = True
-        #self.options["boost"].without_container = True
-        #self.options["boost"].without_context = True
-        #self.options["boost"].without_contract = True
-        #self.options["boost"].without_coroutine = True
-        #self.options["boost"].without_exception = True
-        #self.options["boost"].without_fiber = True
-        #self.options["boost"].without_filesystem = True
-        #self.options["boost"].without_graph = True
-        #self.options["boost"].without_iostreams = True
-        #self.options["boost"].without_json = True
-        #self.options["boost"].without_locale = True
-        #self.options["boost"].without_log = True
-        #self.options["boost"].without_math = True
-        #self.options["boost"].without_mpi = True
-        #self.options["boost"].without_nowide = True
-        #self.options["boost"].without_program_options = True
-        #self.options["boost"].without_random = True
-        #self.options["boost"].without_regex = True
-        #self.options["boost"].without_serialization = False
-        #self.options["boost"].without_stacktrace = True
-        #self.options["boost"].without_system = True
-        #self.options["boost"].without_test = True
-        #self.options["boost"].without_thread = True
-        #self.options["boost"].without_timer = True
-        #self.options["boost"].without_type_erasure = True
-        #self.options["boost"].without_wave = True
-        pass
+        SharedConfig.apply_options(self)

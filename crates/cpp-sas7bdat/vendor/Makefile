@@ -21,8 +21,8 @@ ENABLE_SANITIZER_MEMORY := OFF
 ENABLE_TESTING := ON
 
 PIP_OPTIONS :=
-#CONAN_OPTIONS := -s:b compiler.cppstd=17 -s:h compiler.cppstd=17 --profile:build=default --build=catch2/3.4.0 --build=missing
-CONAN_OPTIONS := -s:b compiler.cppstd=20 -s:h compiler.cppstd=20 --profile:build=default --profile:host=default --build=missing
+CONAN_OPTIONS := -s:b compiler.cppstd=17 -s:h compiler.cppstd=17 --profile:build=default --build=catch2/3.4.0 --build=missing
+#CONAN_OPTIONS := -s:b compiler.cppstd=20 -s:h compiler.cppstd=20 --profile:build=default --profile:host=default --build=missing
 
 # Define the path to the Conan executable relative to the Makefile's location
 CONAN_BIN := ../../.venv/bin/conan
@@ -45,6 +45,13 @@ configure:
 
 .PHONY: build
 build: configure
+	@echo "--- Build dependencies here"
+	# Install using the dependency classes from conanfile.py with shared settings --deployer=direct_deploy
+	conan install ./conan_files/boost.py ${CONAN_OPTIONS} -of build/dependencies --deployer=direct_deploy
+	conan install ./conan_files/arrow.py ${CONAN_OPTIONS} -of build/dependencies --deployer=direct_deploy
+	conan install ./conan_files/spdlog.py ${CONAN_OPTIONS} -of build/dependencies --deployer=direct_deploy
+	conan install ./conan_files/fmt.py ${CONAN_OPTIONS} -of build/dependencies --deployer=direct_deploy
+	
 	@echo "--- Build configure here" 
 	cd build; conan build .. ${CONAN_OPTIONS} -o '&:ENABLE_COVERAGE=${ENABLE_COVERAGE}' -o '&:ENABLE_TESTING=${ENABLE_TESTING}'
 

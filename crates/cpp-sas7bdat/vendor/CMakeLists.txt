@@ -17,11 +17,11 @@ include(cmake/PreventInSourceBuilds.cmake)
 # variable controlling whether the build is a shared or static library
 if (WIN32)
   set(LIBRARY_TYPE STATIC CACHE STRING "type of library to make for lib_cppsas7bdat")
-  set(Boost_USE_STATIC_LIBS ON)
+  set(Boost_USE_STATIC_LIBS OFF)
 else()
   #set(LIBRARY_TYPE SHARED CACHE STRING "type of library to make for lib_cppsas7bdat")
   set(LIBRARY_TYPE STATIC CACHE STRING "type of library to make for lib_cppsas7bdat")
-  set(Boost_USE_STATIC_LIBS ON)
+  set(Boost_USE_STATIC_LIBS OFF)
 endif()
 
 #
