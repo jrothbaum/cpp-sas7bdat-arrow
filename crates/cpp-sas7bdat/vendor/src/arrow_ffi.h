@@ -1,6 +1,6 @@
 /**
  * @file src/arrow_ffi.h  
- * @brief C FFI interface for SAS7BDAT to Arrow conversion (Rust compatible)
+ * @brief C FFI interface for SAS7BDAT to Apache Arrow conversion with streaming support
  */
 
 #ifndef CPPSAS7BDAT_ARROW_FFI_H
@@ -28,45 +28,45 @@ typedef enum {
     SAS_ARROW_ERROR_OUT_OF_MEMORY = 3,
     SAS_ARROW_ERROR_ARROW_ERROR = 4,
     SAS_ARROW_ERROR_END_OF_DATA = 5,
-    SAS_ARROW_ERROR_INVALID_BATCH_INDEX = 6,
-    SAS_ARROW_ERROR_NULL_POINTER = 7
+    SAS_ARROW_ERROR_INVALID_BATCH_INDEX = 6, // Kept for consistency, but less relevant for streaming FFI
+    SAS_ARROW_ERROR_NULL_POINTER = 7,
 } SasArrowErrorCode;
 
-// Reader info structure
+// Reader info structure - simplified for streaming
 typedef struct {
-    uint64_t num_rows;
-    uint32_t num_columns;
-    uint32_t num_batches;
-    uint32_t chunk_size;
+    // In true streaming, total rows/batches are unknown until the entire file has been iterated.
+    // These fields will be 0 when retrieved before full iteration completes.    
+    uint32_t num_columns; // Number of columns in the dataset, known after schema initialization
+    uint32_t chunk_size;  // Configured chunk size for Arrow RecordBatches
+    bool schema_ready;    // Indicates if schema information has been successfully loaded
 } SasArrowReaderInfo;
 
 // Column information
 typedef struct {
     const char* name;
-    const char* type_name;  // "string", "int64", "float64", "timestamp", "date32", "time64"
+    const char* type_name;  // e.g., "string", "int64", "float64", "timestamp(MICRO)", "date32", "time64(MICRO)"
     uint32_t index;
 } SasArrowColumnInfo;
 
 /**
- * Create a new SAS Arrow reader from a file path
- * 
- * @param file_path Path to the .sas7bdat file
- * @param chunk_size Number of rows per batch (0 = default 65536)
- * @param reader Output pointer to the created reader
- * @return Error code
+ * Create a new SAS Arrow reader instance. This reader operates in a streaming fashion.
+ * The schema (metadata) is initialized upon creation without reading all data.
+ * * @param file_path Path to the .sas7bdat file.
+ * @param chunk_size Desired number of rows per Arrow batch. A value of 0 uses the default (65536).
+ * @param reader_out Output pointer to the created SasArrowReader opaque handle. Must be destroyed with sas_arrow_reader_destroy().
+ * @return Error code (SAS_ARROW_OK on success, or an error code if file cannot be opened/initialized).
  */
-SasArrowErrorCode sas_arrow_reader_new(
+SasArrowErrorCode sas_arrow_reader(
     const char* file_path,
     uint32_t chunk_size,
-    SasArrowReader** reader
+    SasArrowReader** reader_out
 );
 
 /**
- * Get basic information about the SAS file
- * 
- * @param reader The SAS reader instance
- * @param info Output structure with file information
- * @return Error code
+ * Get basic information about the SAS file and reader state.
+ * * @param reader The SAS reader instance.
+ * @param info Output structure to fill with file information.
+ * @return Error code.
  */
 SasArrowErrorCode sas_arrow_reader_get_info(
     const SasArrowReader* reader,
@@ -74,12 +74,13 @@ SasArrowErrorCode sas_arrow_reader_get_info(
 );
 
 /**
- * Get column information
- * 
- * @param reader The SAS reader instance
- * @param column_index Zero-based column index
- * @param column_info Output structure with column information
- * @return Error code
+ * Get detailed information for a specific column by index.
+ * The schema must be ready (checked via `sas_arrow_reader_get_info`) before calling this.
+ * * @param reader The SAS reader instance.
+ * @param column_index Zero-based index of the column.
+ * @param column_info Output structure to fill with column information. The `name` and `type_name`
+ * pointers are valid as long as the `SasArrowReader` instance exists.
+ * @return Error code.
  */
 SasArrowErrorCode sas_arrow_reader_get_column_info(
     const SasArrowReader* reader,
@@ -88,11 +89,12 @@ SasArrowErrorCode sas_arrow_reader_get_column_info(
 );
 
 /**
- * Get the Arrow schema (must be called before getting batches)
- * 
- * @param reader The SAS reader instance
- * @param schema Output Arrow schema (caller must release)
- * @return Error code
+ * Get the Arrow schema for the dataset.
+ * This can be called immediately after `sas_arrow_reader_new` completes successfully.
+ * The caller is responsible for releasing the `ArrowSchema` structure using its `release` callback.
+ * * @param reader The SAS reader instance.
+ * @param schema Output Arrow schema structure.
+ * @return Error code.
  */
 SasArrowErrorCode sas_arrow_reader_get_schema(
     const SasArrowReader* reader,
@@ -100,90 +102,49 @@ SasArrowErrorCode sas_arrow_reader_get_schema(
 );
 
 /**
- * Read all data and get a specific record batch
- * 
- * @param reader The SAS reader instance
- * @param batch_index Zero-based batch index
- * @param array Output Arrow array (caller must release)
- * @return Error code
- */
-SasArrowErrorCode sas_arrow_reader_get_batch(
-    SasArrowReader* reader,
-    uint32_t batch_index,
-    struct ArrowArray* array
-);
-
-/**
- * Get record batch with schema in one call
- * 
- * @param reader The SAS reader instance
- * @param batch_index Zero-based batch index
- * @param array Output Arrow array (caller must release)
- * @param schema Output Arrow schema (caller must release)
- * @return Error code
- */
-SasArrowErrorCode sas_arrow_reader_get_batch_with_schema(
-    SasArrowReader* reader,
-    uint32_t batch_index,
-    struct ArrowArray* array,
-    struct ArrowSchema* schema
-);
-
-/**
- * Stream interface: get next batch (reads file progressively)
- * 
- * @param reader The SAS reader instance
- * @param array Output Arrow array (caller must release)
- * @return Error code (SAS_ARROW_ERROR_END_OF_DATA when finished)
+ * Stream interface: Retrieves the next available Arrow RecordBatch.
+ * This function reads from the underlying SAS file progressively.
+ * The caller is responsible for releasing the `ArrowArray` structure using its `release` callback.
+ * * @param reader The SAS reader instance.
+ * @param array_out Output Arrow array structure containing the next record batch.
+ * @return Error code. Returns `SAS_ARROW_ERROR_END_OF_DATA` when all batches have been read.
  */
 SasArrowErrorCode sas_arrow_reader_next_batch(
     SasArrowReader* reader,
-    struct ArrowArray* array
+    struct ArrowArray* array_out
 );
 
 /**
- * Reset the stream reader to the beginning
- * 
- * @param reader The SAS reader instance
- * @return Error code
- */
-SasArrowErrorCode sas_arrow_reader_reset(SasArrowReader* reader);
-
-/**
- * Get the last error message (thread-local)
- * 
- * @return Pointer to error message string (valid until next call)
+ * Retrieves the last error message set by an FFI function call on the current thread.
+ * * @return A C-style string containing the error message. This string is valid until
+ * the next FFI call that might overwrite the thread-local error state.
  */
 const char* sas_arrow_get_last_error(void);
 
 /**
- * Destroy the SAS reader and free resources
- * 
- * @param reader The SAS reader instance to destroy
+ * Destroys the SAS reader instance and frees all associated resources.
+ * * @param reader The SAS reader instance to destroy.
  */
 void sas_arrow_reader_destroy(SasArrowReader* reader);
 
 // Utility functions for error handling
 
 /**
- * Convert error code to human-readable string
- * 
- * @param error_code The error code
- * @return Static string describing the error
+ * Converts a `SasArrowErrorCode` to a human-readable string message.
+ * * @param error_code The error code.
+ * @return A static string describing the error.
  */
 const char* sas_arrow_error_message(SasArrowErrorCode error_code);
 
 /**
- * Check if error code indicates success
- * 
- * @param error_code The error code to check
- * @return true if successful, false otherwise
+ * Checks if a `SasArrowErrorCode` indicates success.
+ * * @param error_code The error code to check.
+ * @return `true` if `error_code` is `SAS_ARROW_OK`, `false` otherwise.
  */
 bool sas_arrow_is_ok(SasArrowErrorCode error_code);
 
 #ifdef __cplusplus
 }
 #endif
-
 
 #endif // CPPSAS7BDAT_ARROW_FFI_H

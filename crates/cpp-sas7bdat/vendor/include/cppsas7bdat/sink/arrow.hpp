@@ -1,13 +1,12 @@
 /**
- *  \file include/cppsas7bdat/sink/arrow.hpp
+ * \file include/cppsas7bdat/sink/arrow.hpp
  *
- *  \brief Apache Arrow datasink
+ * \brief Apache Arrow datasink for streaming chunked output
  *
- *  \author Generated based on cppsas7bdat CSV sink
+ * \author Modified for streaming based on cppsas7bdat CSV sink
  */
 #ifndef _CPP_SAS7BDAT_SINK_ARROW_HPP_
 #define _CPP_SAS7BDAT_SINK_ARROW_HPP_
-
 
 #include <cppsas7bdat/column.hpp>
 #include <arrow/api.h>
@@ -17,8 +16,6 @@
 #include <arrow/type.h>
 #include <arrow/status.h>
 #include <arrow/c/bridge.h>  // For C Data Interface
-#include <arrow/io/api.h>    // For FileOutputStream  
-#include <arrow/ipc/api.h>   // For IPC writer
 #include <memory>
 #include <vector>
 #include <string>
@@ -32,9 +29,9 @@ private:
     COLUMNS columns;
     std::shared_ptr<arrow::Schema> schema_;
     std::vector<std::shared_ptr<arrow::ArrayBuilder>> builders_;
-    std::vector<std::shared_ptr<arrow::RecordBatch>> batches_;
     int64_t chunk_size_;
-    int64_t current_row_count_;
+    int64_t current_row_count_; // Tracks rows in the current, in-progress chunk
+    bool builders_need_reset_ = false; 
     
     // Convert SAS column type to Arrow DataType
     std::shared_ptr<arrow::DataType> sas_to_arrow_type(cppsas7bdat::Column::Type type) {
@@ -88,12 +85,10 @@ private:
             case cppsas7bdat::Column::Type::string: {
                 auto string_builder = static_cast<arrow::StringBuilder*>(builder.get());
                 auto value = column.get_string(p);
-                // String might be empty but probably never null in this implementation
                 return string_builder->Append(std::string(value.data(), value.size()));
             }
             case cppsas7bdat::Column::Type::integer: {
                 auto int_builder = static_cast<arrow::Int64Builder*>(builder.get());
-                // Column interface returns INTEGER directly, not INTEGER*
                 auto value = column.get_integer(p);
                 return int_builder->Append(static_cast<int64_t>(value));
             }
@@ -109,11 +104,9 @@ private:
             case cppsas7bdat::Column::Type::datetime: {
                 auto ts_builder = static_cast<arrow::TimestampBuilder*>(builder.get());
                 auto value = column.get_datetime(p);
-                // Check if datetime is "not-a-date-time" (Boost's way of representing null)
                 if (value.is_not_a_date_time()) {
                     return ts_builder->AppendNull();
                 } else {
-                    // Convert boost::posix_time::ptime to microseconds since epoch
                     auto epoch = boost::posix_time::ptime(boost::gregorian::date(1970, 1, 1));
                     auto duration = value - epoch;
                     int64_t microseconds = duration.total_microseconds();
@@ -123,11 +116,9 @@ private:
             case cppsas7bdat::Column::Type::date: {
                 auto date_builder = static_cast<arrow::Date32Builder*>(builder.get());
                 auto value = column.get_date(p);
-                // Check if date is "not-a-date" (Boost's way of representing null)
                 if (value.is_not_a_date()) {
                     return date_builder->AppendNull();
                 } else {
-                    // Convert boost::gregorian::date to days since epoch (1970-01-01)
                     boost::gregorian::date epoch(1970, 1, 1);
                     auto days = (value - epoch).days();
                     return date_builder->Append(static_cast<int32_t>(days));
@@ -136,61 +127,59 @@ private:
             case cppsas7bdat::Column::Type::time: {
                 auto time_builder = static_cast<arrow::Time64Builder*>(builder.get());
                 auto value = column.get_time(p);
-                // Check if time is "not-a-date-time" (Boost's way of representing null)
                 if (value.is_not_a_date_time()) {
                     return time_builder->AppendNull();
                 } else {
-                    // Convert boost::posix_time::time_duration to microseconds since midnight
                     int64_t microseconds = value.total_microseconds();
                     return time_builder->Append(microseconds);
                 }
             }
             case cppsas7bdat::Column::Type::unknown:
             default: {
-                // Handle unknown column types by treating as string
                 auto string_builder = static_cast<arrow::StringBuilder*>(builder.get());
-                auto value = column.to_string(p);  // Use the generic to_string method
+                auto value = column.to_string(p);
                 return string_builder->Append(value);
             }
         }
         return arrow::Status::OK();
     }
     
-    // Finalize current chunk and create a record batch
-    arrow::Status finalize_chunk() {
+    // Finalize current chunk and create a record batch.
+    // This method now returns the batch directly instead of storing it.
+    arrow::Result<std::shared_ptr<arrow::RecordBatch>> finalize_current_chunk() {
         if (current_row_count_ == 0) {
-            return arrow::Status::OK();
+            return arrow::Result<std::shared_ptr<arrow::RecordBatch>>(nullptr);
         }
-        
+
         std::vector<std::shared_ptr<arrow::Array>> arrays;
         arrays.reserve(builders_.size());
-        
+
         for (auto& builder : builders_) {
             std::shared_ptr<arrow::Array> array;
             ARROW_RETURN_NOT_OK(builder->Finish(&array));
             arrays.push_back(array);
         }
-        
+
         auto batch = arrow::RecordBatch::Make(schema_, current_row_count_, arrays);
-        batches_.push_back(batch);
-        
-        // Reset builders for next chunk
-        for (size_t i = 0; i < builders_.size(); ++i) {
-            builders_[i] = create_builder(columns[i].type);
-        }
+
+        // DON'T reset builders immediately - defer until next push_row
+        builders_need_reset_ = true;
         current_row_count_ = 0;
-        
-        return arrow::Status::OK();
+
+        return batch;
     }
-    
 
 public:
     explicit arrow_sink(int64_t chunk_size = 65536) noexcept 
-        : chunk_size_(chunk_size), current_row_count_(0) {}
+        : chunk_size_(chunk_size), current_row_count_(0), builders_need_reset_(false) {
+    }
+
+    ~arrow_sink() {
+    }
     
     void set_properties(const Properties& _properties) {
         columns = COLUMNS(_properties.columns);
-        
+
         // Create Arrow schema
         std::vector<std::shared_ptr<arrow::Field>> fields;
         fields.reserve(columns.size());
@@ -201,128 +190,89 @@ public:
         }
         
         schema_ = arrow::schema(fields);
-        
         // Initialize builders
+        builders_.clear();  // Clear any existing builders
         builders_.reserve(columns.size());
-        for (const auto& column : columns) {
-            builders_.push_back(create_builder(column.type));
+        
+        for (size_t i = 0; i < columns.size(); ++i) {
+            builders_.push_back(create_builder(columns[i].type));
         }
     }
     
-    void push_row([[maybe_unused]] size_t irow, Column::PBUF p) {
+    void set_column_names(const std::vector<std::string>&) noexcept {}
+    void set_column_types(const std::vector<Column::Type>&) noexcept {}
+    
+    void push_row([[maybe_unused]] size_t irow, [[maybe_unused]] Column::PBUF p) {
+        // Reset builders if they were finished in the last batch
+        if (builders_need_reset_) {
+            builders_.clear();
+            builders_.reserve(columns.size());
+            
+            for (size_t i = 0; i < columns.size(); ++i) {
+                builders_.push_back(create_builder(columns[i].type));
+            }
+            
+            builders_need_reset_ = false;
+        }
+        
+        // Process each column
         for (size_t i = 0; i < columns.size(); ++i) {
             auto status = append_value(i, p);
             if (!status.ok()) {
-                // Handle error - in production code you might want to throw or return error
-                // For now, we'll just skip the problematic value
+                printf("WARNING: Failed to append value for column %zu: %s\n", 
+                    i, status.ToString().c_str());
+                fflush(stdout);
                 continue;
             }
         }
         
         current_row_count_++;
-        
-        // Check if we should finalize current chunk
-        if (current_row_count_ >= chunk_size_) {
-            auto status = finalize_chunk();
-            // Handle potential error from finalize_chunk if needed
-        }
     }
     
+    // This method is called by the cppsas7bdat::Reader when it finishes reading
+    // its underlying data source. In a streaming context, its role is minimal
+    // as the external FFI layer explicitly handles the final batch.
     void end_of_data() const noexcept {
-        // Finalize any remaining data in the last chunk
-        if (current_row_count_ > 0) {
-            auto status = const_cast<arrow_sink*>(this)->finalize_chunk();
-            // Handle potential error from finalize_chunk if needed
-        }
+        // No implicit batch finalization here.
+        // All batching and finalization responsibility is with get_next_available_batch()
+        // and get_final_batch() called by the FFI consumer.
     }
     
-    // Get the Arrow schema
+    // Returns the Arrow schema once it has been initialized by set_properties.
     std::shared_ptr<arrow::Schema> get_schema() const {
         return schema_;
     }
     
-    // Get all record batches
-    const std::vector<std::shared_ptr<arrow::RecordBatch>>& get_record_batches() const {
-        return batches_;
+    // Returns the configured chunk size for this sink.
+    int64_t get_chunk_size() const {
+        return chunk_size_;
     }
-    
-    // Get a single concatenated table (if you prefer table over record batches)
-    arrow::Result<std::shared_ptr<arrow::Table>> get_table() const {
-        if (batches_.empty()) {
-            return arrow::Status::Invalid("No data available");
-        }
-        return arrow::Table::FromRecordBatches(schema_, batches_);
-    }
-    
-    // Export to Arrow C Data Interface (for zero-copy interop with other systems)
-    arrow::Status export_record_batch(size_t batch_index, ArrowArray* c_array, ArrowSchema* c_schema) const {
-        if (batch_index >= batches_.size()) {
-            return arrow::Status::IndexError("Batch index out of range");
-        }
-        
-        // Export schema (only needed once)
-        if (c_schema != nullptr) {
-            ARROW_RETURN_NOT_OK(arrow::ExportSchema(*schema_, c_schema));
-        }
-        
-        // Export record batch
-        ARROW_RETURN_NOT_OK(arrow::ExportRecordBatch(*batches_[batch_index], c_array));
-        
-        return arrow::Status::OK();
-    }
-};
 
-// File-based sink that writes to Arrow IPC format
-class arrow_file_sink : public arrow_sink {
-private:
-    std::string filename_;
+    // Attempts to finalize and return a RecordBatch if enough rows (>= chunk_size)
+    // have been accumulated. If not, returns nullptr (wrapped in Result).
+    arrow::Result<std::shared_ptr<arrow::RecordBatch>> get_next_available_batch() {
+        if (current_row_count_ >= chunk_size_) {
+            return finalize_current_chunk();
+        }
+        return arrow::Result<std::shared_ptr<arrow::RecordBatch>>(nullptr);
+    }
     
-public:
-    explicit arrow_file_sink(const char* filename, int64_t chunk_size = 65536)
-        : arrow_sink(chunk_size), filename_(filename) {}
-    
-    void end_of_data() const noexcept {
-        // Finalize any remaining data
-        const_cast<arrow_file_sink*>(this)->arrow_sink::end_of_data();
-        
-        // Write to file in Arrow IPC format
-        auto file_result = arrow::io::FileOutputStream::Open(filename_);
-        if (!file_result.ok()) {
-            // Handle file open error
-            return;
+    // Finalizes and returns any remaining partial RecordBatch at the end of data.
+    // Returns nullptr if no rows are left.
+    arrow::Result<std::shared_ptr<arrow::RecordBatch>> get_final_batch() {
+        if (current_row_count_ > 0) {
+            return finalize_current_chunk();
         }
-        auto file = file_result.ValueOrDie();
-        
-        auto writer_result = arrow::ipc::MakeFileWriter(file, get_schema());
-        if (!writer_result.ok()) {
-            // Handle writer creation error
-            return;
-        }
-        auto writer = writer_result.ValueOrDie();
-        
-        // Write all record batches
-        for (const auto& batch : get_record_batches()) {
-            auto status = writer->WriteRecordBatch(*batch);
-            if (!status.ok()) {
-                // Handle write error
-                continue;
-            }
-        }
-        
-        auto status = writer->Close();
-        // Handle close error if needed
+        return arrow::Result<std::shared_ptr<arrow::RecordBatch>>(nullptr);
     }
 };
 
 } // namespace detail
 
+// The arrow_factory now only supports the base arrow_sink.
 struct arrow_factory {
     auto operator()(int64_t chunk_size = 65536) const noexcept {
         return detail::arrow_sink(chunk_size);
-    }
-    
-    auto operator()(const char* filename, int64_t chunk_size = 65536) const {
-        return detail::arrow_file_sink(filename, chunk_size);
     }
 } arrow;
 

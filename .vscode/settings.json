@@ -74,7 +74,18 @@
         "thread": "cpp",
         "cinttypes": "cpp",
         "typeindex": "cpp",
-        "typeinfo": "cpp"
+        "typeinfo": "cpp",
+        "csetjmp": "cpp",
+        "bitset": "cpp",
+        "coroutine": "cpp",
+        "forward_list": "cpp",
+        "unordered_set": "cpp",
+        "regex": "cpp",
+        "rope": "cpp",
+        "slist": "cpp",
+        "ranges": "cpp",
+        "scoped_allocator": "cpp",
+        "valarray": "cpp"
     },
     "rust-analyzer.linkedProjects": [
         "./crates/cpp-sas7bdat/Cargo.toml"

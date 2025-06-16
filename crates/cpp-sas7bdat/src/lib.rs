@@ -4,7 +4,7 @@ use std::ptr;
 use polars::prelude::*;
 use polars_arrow;
 
-// Error codes from your C FFI
+// Error codes matching your C++ header exactly
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SasArrowErrorCode {
@@ -18,14 +18,22 @@ pub enum SasArrowErrorCode {
     SasArrowErrorNullPointer = 7,
 }
 
-// Reader info structure
+// Reader info structure matching your C++ header
 #[repr(C)]
 #[derive(Debug, Clone, Copy)] 
 pub struct SasArrowReaderInfo {
-    pub num_rows: u64,
     pub num_columns: u32,
-    pub num_batches: u32,
     pub chunk_size: u32,
+    pub schema_ready: bool,
+}
+
+// Column info structure matching your C++ header
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SasArrowColumnInfo {
+    pub name: *const c_char,
+    pub type_name: *const c_char,
+    pub index: u32,
 }
 
 // Arrow FFI structures (compatible with Arrow C Data Interface)
@@ -95,12 +103,13 @@ pub struct SasArrowReader {
     _private: [u8; 0],
 }
 
-// External C functions from your FFI
+// External C functions matching your actual C++ implementation
 extern "C" {
-    fn sas_arrow_reader_new(
+    // Main constructor function (matches your C++ function name exactly)
+    fn sas_arrow_reader(
         file_path: *const c_char,
         chunk_size: u32,
-        reader: *mut *mut SasArrowReader,
+        reader_out: *mut *mut SasArrowReader,
     ) -> SasArrowErrorCode;
 
     fn sas_arrow_reader_get_info(
@@ -108,21 +117,20 @@ extern "C" {
         info: *mut SasArrowReaderInfo,
     ) -> SasArrowErrorCode;
 
+    fn sas_arrow_reader_get_column_info(
+        reader: *const SasArrowReader,
+        column_index: u32,
+        column_info: *mut SasArrowColumnInfo,
+    ) -> SasArrowErrorCode;
+
     fn sas_arrow_reader_get_schema(
         reader: *const SasArrowReader,
         schema: *mut CArrowSchema,
     ) -> SasArrowErrorCode;
 
-    fn sas_arrow_reader_get_batch_with_schema(
-        reader: *mut SasArrowReader,
-        batch_index: u32,
-        array: *mut CArrowArray,
-        schema: *mut CArrowSchema,
-    ) -> SasArrowErrorCode;
-
     fn sas_arrow_reader_next_batch(
         reader: *mut SasArrowReader,
-        array: *mut CArrowArray,
+        array_out: *mut CArrowArray,
     ) -> SasArrowErrorCode;
 
     fn sas_arrow_reader_reset(reader: *mut SasArrowReader) -> SasArrowErrorCode;
@@ -132,6 +140,8 @@ extern "C" {
     fn sas_arrow_get_last_error() -> *const c_char;
 
     fn sas_arrow_error_message(error_code: SasArrowErrorCode) -> *const c_char;
+    
+    fn sas_arrow_is_ok(error_code: SasArrowErrorCode) -> bool;
 }
 
 pub struct SasReader {
@@ -148,10 +158,10 @@ impl SasReader {
             .map_err(|e| PolarsError::ComputeError(format!("Invalid file path: {}", e).into()))?;
         
         let mut reader: *mut SasArrowReader = ptr::null_mut();
-        let chunk_size = chunk_size.unwrap_or(0); // 0 = default
+        let chunk_size = chunk_size.unwrap_or(0); // 0 = default (65536)
         
         let result = unsafe {
-            sas_arrow_reader_new(c_path.as_ptr(), chunk_size, &mut reader)
+            sas_arrow_reader(c_path.as_ptr(), chunk_size, &mut reader)
         };
         
         if result != SasArrowErrorCode::SasArrowOk {
@@ -160,10 +170,9 @@ impl SasReader {
         
         // Get file info
         let mut info = SasArrowReaderInfo {
-            num_rows: 0,
             num_columns: 0,
-            num_batches: 0,
             chunk_size: 0,
+            schema_ready: false,
         };
         
         let result = unsafe {
@@ -183,8 +192,8 @@ impl SasReader {
         })
     }
     
-    /// Get schema information (returns field names and types)
-    pub fn get_schema_info(&mut self) -> PolarsResult<&Schema> {
+    /// Get schema information
+    pub fn get_schema(&mut self) -> PolarsResult<&Schema> {
         if self.cached_schema.is_none() {
             let mut c_schema = CArrowSchema::empty();
             
@@ -201,56 +210,56 @@ impl SasReader {
                 self.arrow_schema_to_polars_schema(&c_schema)? 
             };
             
-            
-            
             self.cached_schema = Some(polars_schema);
             self.cached_arrow_field = Some(arrow_field);
         }
         
         Ok(self.cached_schema.as_ref().unwrap())
     }
+
+    /// Get basic info
+    pub fn get_info(&self) -> &SasArrowReaderInfo {
+        &self.info
+    }
+
+    /// Get column information
+    pub fn get_column_info(&self, column_index: u32) -> PolarsResult<(String, String)> {
+        let mut column_info = SasArrowColumnInfo {
+            name: ptr::null(),
+            type_name: ptr::null(),
+            index: 0,
+        };
+        
+        let result = unsafe {
+            sas_arrow_reader_get_column_info(self.reader, column_index, &mut column_info)
+        };
+        
+        if result != SasArrowErrorCode::SasArrowOk {
+            return Err(Self::error_from_code(result));
+        }
+        
+        let name = unsafe {
+            if column_info.name.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(column_info.name).to_string_lossy().to_string()
+            }
+        };
+        
+        let type_name = unsafe {
+            if column_info.type_name.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(column_info.type_name).to_string_lossy().to_string()
+            }
+        };
+        
+        Ok((name, type_name))
+    }
     
-    /// Read all data as a single DataFrame
-    // pub fn read_all(&mut self) -> PolarsResult<DataFrame> {
-    //     let mut dataframes = Vec::new();
-        
-    //     // Reset to beginning
-    //     let result = unsafe { sas_arrow_reader_reset(self.reader) };
-    //     if result != SasArrowErrorCode::SasArrowOk {
-    //         return Err(Self::error_from_code(result));
-    //     }
-        
-    //     // Read all batches
-    //     loop {
-    //         match self.read_next_batch() {
-    //             Ok(df) => dataframes.push(df),
-    //             Err(e) => {
-    //                 // Check if it's end of data
-    //                 if e.to_string().contains("end of data") {
-    //                     break;
-    //                 }
-    //                 return Err(e);
-    //             }
-    //         }
-    //     }
-        
-    //     if dataframes.is_empty() {
-    //         return Err(PolarsError::ComputeError("No data found in SAS file".into()));
-    //     }
-        
-    //     // Concatenate all dataframes
-    //     let mut result_df = dataframes.into_iter().next().unwrap();
-    //     for df in dataframes.into_iter().skip(1) {
-    //         result_df = result_df.vstack(&df)?;
-    //     }
-        
-    //     Ok(result_df)
-    // }
-    
-    /// Read the next batch as a DataFrame (streaming interface)
+    /// Read the next batch as a DataFrame
     pub fn read_next_batch(&mut self) -> PolarsResult<DataFrame> {
-        // Ensure schema is cached
-        self.get_schema_info()?;
+        self.get_schema()?;
         
         let mut c_array = CArrowArray::empty();
         
@@ -266,43 +275,11 @@ impl SasReader {
             return Err(Self::error_from_code(result));
         }
         
-        // Use cached schema for conversion
+        // Now convert the actual Arrow data to DataFrame
         let arrow_field = self.cached_arrow_field.as_ref().unwrap().clone();
         let df = self.arrow_to_dataframe_with_field(c_array, arrow_field)?;
         
         Ok(df)
-    }
-    
-    /// Read a specific batch by index
-    pub fn read_batch(&mut self, batch_index: u32) -> PolarsResult<DataFrame> {
-        if batch_index >= self.info.num_batches {
-            return Err(PolarsError::ComputeError(
-                format!("Batch index {} out of range (max: {})", batch_index, self.info.num_batches - 1).into()
-            ));
-        }
-        
-        // Ensure schema is cached
-        self.get_schema_info()?;
-        
-        let mut c_array = CArrowArray::empty();
-        let mut c_schema = CArrowSchema::empty();
-        
-        let result = unsafe {
-            sas_arrow_reader_get_batch_with_schema(
-                self.reader,
-                batch_index,
-                &mut c_array,
-                &mut c_schema,
-            )
-        };
-        
-        if result != SasArrowErrorCode::SasArrowOk {
-            return Err(Self::error_from_code(result));
-        }
-        
-        // Use cached schema for conversion
-        let arrow_field = self.cached_arrow_field.as_ref().unwrap().clone();
-        self.arrow_to_dataframe_with_field(c_array, arrow_field)
     }
     
     /// Convert Arrow C Data Interface to Polars DataFrame using cached field
@@ -336,22 +313,6 @@ impl SasReader {
             }
             
             Ok(DataFrame::from_iter(columns))
-        }
-    }
-    
-
-    /// Convert Arrow C Data Interface to Polars DataFrame using FFI
-    fn arrow_to_dataframe(&self, c_array: CArrowArray, c_schema: CArrowSchema) -> PolarsResult<DataFrame> {
-        unsafe {
-            // Read the schema data directly (taking ownership)
-            let schema_ptr = &c_schema as *const CArrowSchema as *const polars_arrow::ffi::ArrowSchema;
-            let arrow_schema = std::ptr::read(schema_ptr);
-            
-            // Import field from C schema using polars_arrow FFI
-            let field = polars_arrow::ffi::import_field_from_c(&arrow_schema)
-                .map_err(|e| PolarsError::ComputeError(format!("Failed to import schema: {}", e).into()))?;
-            
-            self.arrow_to_dataframe_with_field(c_array, field)
         }
     }
     
@@ -402,7 +363,7 @@ impl SasReader {
                     polars_arrow::datatypes::TimeUnit::Millisecond => TimeUnit::Milliseconds,
                     polars_arrow::datatypes::TimeUnit::Second => TimeUnit::Milliseconds,
                 };
-                DataType::Datetime(time_unit,None)
+                DataType::Datetime(time_unit, None)
             },
             
             // SAS date columns -> Date32 (days since epoch)
@@ -422,7 +383,7 @@ impl SasReader {
         Ok(polars_type)
     }
     
-    /// Reset the streaming reader to the beginning
+    /// Reset the reader (may not be implemented in your C++ code yet)
     pub fn reset(&mut self) -> PolarsResult<()> {
         let result = unsafe { sas_arrow_reader_reset(self.reader) };
         
@@ -431,11 +392,6 @@ impl SasReader {
         }
         
         Ok(())
-    }
-    
-    /// Get reader information
-    pub fn info(&self) -> &SasArrowReaderInfo {
-        &self.info
     }
     
     /// Convert error code to PolarsError
@@ -489,21 +445,6 @@ impl Drop for SasReader {
     }
 }
 
-// Convenience functions
-impl SasReader {
-    /// Create a reader and read all data in one call
-    // pub fn read_sas(file_path: &str, chunk_size: Option<u32>) -> PolarsResult<DataFrame> {
-    //     let mut reader = Self::new(file_path, chunk_size)?;
-    //     reader.read_all()
-    // }
-    
-    /// Create a reader and get just the schema
-    pub fn read_sas_schema(file_path: &str) -> PolarsResult<Schema> {
-        let mut reader = Self::new(file_path, None)?;
-        Ok(reader.get_schema_info()?.clone())
-    }
-}
-
 // Iterator implementation for streaming
 pub struct SasBatchIterator {
     reader: SasReader,
@@ -511,6 +452,7 @@ pub struct SasBatchIterator {
 }
 
 impl SasBatchIterator {
+    /// Create a new streaming iterator
     pub fn new(file_path: &str, chunk_size: Option<u32>) -> PolarsResult<Self> {
         let reader = SasReader::new(file_path, chunk_size)?;
         Ok(SasBatchIterator {
@@ -521,18 +463,17 @@ impl SasBatchIterator {
 
     /// Get the schema without reading any data
     pub fn schema(&mut self) -> PolarsResult<&Schema> {
-        self.reader.get_schema_info()
+        self.reader.get_schema()
     }
 
-    /// Get reader info (number of rows, columns, batches, etc.)
+    /// Get reader info
     pub fn info(&self) -> &SasArrowReaderInfo {
-        self.reader.info()
+        &self.reader.info
     }
 }
 
 impl Iterator for SasBatchIterator {
     type Item = PolarsResult<DataFrame>;
-    
     
     fn next(&mut self) -> Option<Self::Item> {
         if self.finished {
@@ -554,55 +495,41 @@ impl Iterator for SasBatchIterator {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_read_sas_all() {
-        // This test requires a real SAS file
-        // let result = SasReader::read_sas("test.sas7bdat", None);
-        // match result {
-        //     Ok(df) => {
-        //         println!("Read {} rows, {} columns", df.height(), df.width());
-        //         println!("Schema: {:?}", df.schema());
-        //     }
-        //     Err(e) => println!("Error reading SAS file: {}", e),
-        // }
-    }
-    
-    #[test]
-    fn test_streaming_read() {
-        let iterator = SasBatchIterator::new("test.sas7bdat", Some(1000));
-        match iterator {
-            Ok(iter) => {
-                for (i, batch_result) in iter.enumerate() {
-                    match batch_result {
-                        Ok(batch) => {
-                            println!("Batch {}: {} rows", i, batch.height());
-                        }
-                        Err(e) => {
-                            println!("Error in batch {}: {}", i, e);
-                            break;
-                        }
-                    }
-                }
-            }
-            Err(e) => println!("Error creating iterator: {}", e),
-        }
-    }
-    
-    #[test]
-    fn test_schema_only() {
-        let result = SasReader::read_sas_schema("test.sas7bdat");
-        match result {
-            Ok(schema) => {
-                println!("Schema: {:?}", schema);
-                for (name, dtype) in schema.iter() {
-                    println!("Column: {} -> {:?}", name, dtype);
-                }
-            }
-            Err(e) => println!("Error reading schema: {}", e),
-        }
+// Convenience functions
+impl SasReader {
+    /// Create a reader and get just the schema
+    pub fn read_sas_schema(file_path: &str) -> PolarsResult<Schema> {
+        let mut reader = Self::new(file_path, Some(1))?;
+        Ok(reader.get_schema()?.clone())
     }
 }
+
+// // Example usage functions
+// pub fn process_sas_file_streaming(file_path: &str) -> PolarsResult<()> {
+//     println!("Processing {} with streaming mode...", file_path);
+    
+//     let iterator = SasBatchIterator::new(file_path, Some(50000))?; // 50k rows per batch
+    
+//     for (i, batch_result) in iterator.enumerate() {
+//         let batch = batch_result?;
+        
+//         println!("Processing batch {}: {} rows", i, batch.height());
+        
+//         // Process each batch (batch is automatically dropped here, freeing memory)
+//     }
+    
+//     Ok(())
+// }
+
+// pub fn inspect_sas_file_schema(file_path: &str) -> PolarsResult<()> {
+//     println!("Inspecting schema of {}...", file_path);
+    
+//     let schema = SasReader::read_sas_schema(file_path)?;
+    
+//     println!("Schema:");
+//     for (name, dtype) in schema.iter() {
+//         println!("  {}: {:?}", name, dtype);
+//     }
+    
+//     Ok(())
+// }

@@ -24,4 +24,4 @@ CMakeUserPresets.json
 *.bin
 *.rlib
 
-*/.conan2/*
+.conan2

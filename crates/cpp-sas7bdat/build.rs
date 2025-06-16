@@ -9,7 +9,7 @@ fn main() {
     
     generate_bindings(&out_dir);
     link_prebuilt_library(&manifest_dir);
-    
+ 
     println!("cargo:rerun-if-changed=vendor/src/arrow_ffi.h");
     println!("cargo:rerun-if-changed=build.rs");
 }
