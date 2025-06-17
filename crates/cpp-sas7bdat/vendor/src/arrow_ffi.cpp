@@ -313,18 +313,8 @@ SasArrowErrorCode sas_arrow_reader_next_batch(
         SasArrowErrorCode err = reader->ensure_schema_ready();
         if (err != SAS_ARROW_OK) return err;
 
-        // LAZY INITIALIZATION: Start reading data on first call
-        if (!reader->data_reading_started) {
-            bool has_data = reader->reader->read_rows(static_cast<size_t>(reader->chunk_size));
-            reader->data_reading_started = true;
-            
-            if (!has_data) {
-                reader->end_of_sas_file_source = true;
-                return SAS_ARROW_ERROR_END_OF_DATA;
-            }
-        }
-
-        // Try to get next available batch
+        // Try to get a batch from any data remaining from a previous read.
+        // On the first call, the sink is empty, so this will correctly do nothing.
         auto batch_result = reader->sink->get_next_available_batch();
         
         if (batch_result.ok() && batch_result.ValueOrDie()) {
@@ -337,13 +327,12 @@ SasArrowErrorCode sas_arrow_reader_next_batch(
             return SAS_ARROW_OK;
         }
 
-        // No batch ready, read more data
+        // If no batch was ready, read a new chunk of data from the file.
         bool more_rows_from_sas = reader->reader->read_rows(static_cast<size_t>(reader->chunk_size));
         
         if (!more_rows_from_sas) {
             reader->end_of_sas_file_source = true;
-            reader->sink->end_of_data(); 
-
+            // Check for a final partial batch.
             auto final_batch_result = reader->sink->get_final_batch();
             if (final_batch_result.ok() && final_batch_result.ValueOrDie()) {
                 auto batch = final_batch_result.ValueOrDie();
@@ -358,7 +347,7 @@ SasArrowErrorCode sas_arrow_reader_next_batch(
             }
         }
 
-        // Try again after reading more data
+        // After reading new data, try to get a batch again.
         batch_result = reader->sink->get_next_available_batch();
         if (batch_result.ok() && batch_result.ValueOrDie()) {
             auto batch = batch_result.ValueOrDie(); 
@@ -370,6 +359,7 @@ SasArrowErrorCode sas_arrow_reader_next_batch(
             return SAS_ARROW_OK;
         }
 
+        // If we still don't have a batch, it means we're at the end.
         return SAS_ARROW_ERROR_END_OF_DATA;
     });
 }

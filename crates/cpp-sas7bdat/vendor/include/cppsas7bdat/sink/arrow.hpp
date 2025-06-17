@@ -57,22 +57,51 @@ private:
     // Create appropriate array builder for the column type
     std::shared_ptr<arrow::ArrayBuilder> create_builder(cppsas7bdat::Column::Type type) {
         auto pool = arrow::default_memory_pool();
+        
         switch (type) {
-            case cppsas7bdat::Column::Type::string:
-                return std::make_shared<arrow::StringBuilder>(pool);
-            case cppsas7bdat::Column::Type::integer:
-                return std::make_shared<arrow::Int64Builder>(pool);
-            case cppsas7bdat::Column::Type::number:
-                return std::make_shared<arrow::DoubleBuilder>(pool);
-            case cppsas7bdat::Column::Type::datetime:
-                return std::make_shared<arrow::TimestampBuilder>(arrow::timestamp(arrow::TimeUnit::MICRO), pool);
-            case cppsas7bdat::Column::Type::date:
-                return std::make_shared<arrow::Date32Builder>(pool);
-            case cppsas7bdat::Column::Type::time:
-                return std::make_shared<arrow::Time64Builder>(arrow::time64(arrow::TimeUnit::MICRO), pool);
+            case cppsas7bdat::Column::Type::string: {
+                auto builder = std::make_shared<arrow::StringBuilder>(pool);
+                
+                // Explicitly ignore the status with void cast
+                (void)builder->Reserve(chunk_size_);
+                (void)builder->ReserveData(chunk_size_ * 20);
+                
+                return builder;
+            }
+            case cppsas7bdat::Column::Type::integer: {
+                auto builder = std::make_shared<arrow::Int64Builder>(pool);
+                (void)builder->Reserve(chunk_size_);
+                return builder;
+            }
+            case cppsas7bdat::Column::Type::number: {
+                auto builder = std::make_shared<arrow::DoubleBuilder>(pool);
+                (void)builder->Reserve(chunk_size_);
+                return builder;
+            }
+            case cppsas7bdat::Column::Type::datetime: {
+                auto builder = std::make_shared<arrow::TimestampBuilder>(
+                    arrow::timestamp(arrow::TimeUnit::MICRO), pool);
+                (void)builder->Reserve(chunk_size_);
+                return builder;
+            }
+            case cppsas7bdat::Column::Type::date: {
+                auto builder = std::make_shared<arrow::Date32Builder>(pool);
+                (void)builder->Reserve(chunk_size_);
+                return builder;
+            }
+            case cppsas7bdat::Column::Type::time: {
+                auto builder = std::make_shared<arrow::Time64Builder>(
+                    arrow::time64(arrow::TimeUnit::MICRO), pool);
+                (void)builder->Reserve(chunk_size_);
+                return builder;
+            }
             case cppsas7bdat::Column::Type::unknown:
-            default:
-                return std::make_shared<arrow::StringBuilder>(pool); // fallback to string for unknown types
+            default: {
+                auto builder = std::make_shared<arrow::StringBuilder>(pool);
+                (void)builder->Reserve(chunk_size_);
+                (void)builder->ReserveData(chunk_size_ * 20);
+                return builder;
+            }
         }
     }
     
@@ -85,7 +114,7 @@ private:
             case cppsas7bdat::Column::Type::string: {
                 auto string_builder = static_cast<arrow::StringBuilder*>(builder.get());
                 auto value = column.get_string(p);
-                return string_builder->Append(std::string(value.data(), value.size()));
+                return string_builder->Append(value);
             }
             case cppsas7bdat::Column::Type::integer: {
                 auto int_builder = static_cast<arrow::Int64Builder*>(builder.get());
@@ -205,13 +234,9 @@ public:
     void push_row([[maybe_unused]] size_t irow, [[maybe_unused]] Column::PBUF p) {
         // Reset builders if they were finished in the last batch
         if (builders_need_reset_) {
-            builders_.clear();
-            builders_.reserve(columns.size());
-            
-            for (size_t i = 0; i < columns.size(); ++i) {
-                builders_.push_back(create_builder(columns[i].type));
+            for (auto& builder : builders_) {
+                builder->Reset();  // Reuse capacity instead of recreating
             }
-            
             builders_need_reset_ = false;
         }
         

@@ -10,11 +10,6 @@ fn main() {
     let start_schema = Instant::now();
     let schema = match SasReader::read_sas_schema(path) {
         Ok(schema_read) => {
-            println!("Schema retrieved successfully!");
-            println!("Number of columns: {}", schema_read.len());
-            for (i, (name, dtype)) in schema_read.iter().enumerate() {
-                println!("  Column {}: {} -> {:?}", i, name, dtype);
-            }
             schema_read
         }
         Err(e) => {
@@ -22,30 +17,23 @@ fn main() {
             return;
         }
     };
-    println!("Schema: {:?}", schema);
+    
     let duration_schema = start_schema.elapsed();
     
     
-    let start_get_iterator = Instant::now();
     let mut sas_iter = SasBatchIterator::new(
         path, 
-        Some(100_000)
+        Some(20_000)
     ).unwrap();
-        
     
-    let duration_get_iterator = start_get_iterator.elapsed();
-    
-    // let info = *sas_iter.info();
-    
-
     let start_read = Instant::now();
     let mut i_rows = 0;
     for (i, batch_result) in sas_iter.enumerate() {
         // Call the method on the iterator
         let df = match batch_result {
             Ok(df) => {
-                println!("DataFrame shape:  {:?}", df.shape());
-                println!("          size:   {:?}", df.estimated_size());
+                //  println!("DataFrame shape:  {:?}", df.shape());
+                //  println!("          size:   {:?}", df.estimated_size());
                 
                 //  println!("{:?}", df);
                 i_rows = i_rows + df.height();
@@ -60,7 +48,6 @@ fn main() {
     let duration_read = start_read.elapsed();
     
     println!("Schema:       {:?}", duration_schema);
-    println!("Iterator:     {:?}", duration_get_iterator);
     println!("Read:         {:?}", duration_read);
     println!("Rows:         {:?}", i_rows);
 
